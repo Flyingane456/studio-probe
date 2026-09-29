@@ -10,6 +10,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 355
     steps:
+      - uses: actions/checkout@v4
+
       - name: Screen size
         shell: pwsh
         run: |
@@ -32,22 +34,46 @@ jobs:
           "vnc install exit=$($p.ExitCode)"
           Get-Service tvnserver | Format-Table Name,Status
 
-      - name: Join Tailscale
+      - name: Join Tailscale (sign-in link goes out encrypted)
         shell: pwsh
-        env:
-          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile ts.msi
           $p = Start-Process msiexec -ArgumentList '/i','ts.msi','/quiet','/norestart' -Wait -PassThru
           "tailscale install exit=$($p.ExitCode)"
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           for ($i = 0; $i -lt 30 -and -not (Test-Path $ts); $i++) { Start-Sleep 2 }
-          & $ts up --authkey=$env:TS_AUTHKEY --hostname=studio-cloud --unattended --timeout=120s *> ts_up.txt
-          "tailscale up exit=$LASTEXITCODE"
-          & $ts ip -4
-          $st = & $ts status --json | ConvertFrom-Json
+          Start-Process $ts -ArgumentList 'up','--hostname=studio-cloud','--unattended','--json' -RedirectStandardOutput ts_up.json -RedirectStandardError ts_up.err -WindowStyle Hidden
+          $url = $null
+          for ($i = 0; $i -lt 60 -and -not $url; $i++) {
+            Start-Sleep 2
+            $m = Select-String -Path ts_up.json, ts_up.err -Pattern 'https://login\.tailscale\.com/a/[A-Za-z0-9]+' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($m) { $url = $m.Matches[0].Value }
+          }
+          "sign-in link found=$([bool]$url)"
+          New-Item -ItemType Directory -Force link | Out-Null
+          Set-Content -NoNewline -Path link/url.txt -Value $url
+          & "C:\Program Files\Git\usr\bin\openssl.exe" pkeyutl -encrypt -pubin -inkey link_pub.pem -pkeyopt rsa_padding_mode:oaep -in link/url.txt -out link/link.bin
+          Remove-Item link/url.txt
+          "encrypt exit=$LASTEXITCODE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signin-link
+          path: link/link.bin
+
+      - name: Wait for sign-in
+        shell: pwsh
+        run: |
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          $ok = $false
+          for ($i = 0; $i -lt 90 -and -not $ok; $i++) {
+            Start-Sleep 10
+            $st = & $ts status --json | ConvertFrom-Json
+            $ok = $st.BackendState -eq 'Running'
+          }
           $peers = @($st.Peer.PSObject.Properties.Value)
-          "peers=$($peers.Count) sees_home_mac=$([bool]($peers | Where-Object { $_.HostName -like 'curtiss-macbook-air*' }))"
+          "joined=$ok peers=$($peers.Count) sees_home_mac=$([bool]($peers | Where-Object { $_.HostName -like 'curtiss-macbook-air*' }))"
+          if (-not $ok) { exit 1 }
 
       - name: Install and open Studio
         shell: pwsh
@@ -65,3 +91,11 @@ jobs:
             "{0:HH:mm} studio={1} memMB={2}" -f (Get-Date), [bool]$s, ($(if ($s) { [math]::Round($s[0].WorkingSet64/1MB) } else { 0 }))
             Start-Sleep 300
           }
+
+      - name: Leave Tailscale
+        if: always()
+        shell: pwsh
+        run: |
+          & "C:\Program Files\Tailscale\tailscale.exe" logout
+          "logged out"
+          exit 0
