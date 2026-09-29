@@ -12,6 +12,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Keep the screen awake and unlocked
+        env:
+          DESK_PASSWORD: ${{ secrets.DESK_PASSWORD }}
+        run: |
+          echo "user=$(whoami)"
+          sudo dscl . -passwd /Users/$(whoami) "$DESK_PASSWORD" && echo "password set"
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          defaults -currentHost write com.apple.screensaver idleTime 0
+          sudo defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          ls -ld ~ ; sudo sshd -T 2>/dev/null | grep -iE "^(authorizedkeysfile|pubkeyauthentication|passwordauthentication|allowusers|strictmodes)" || true
+
       - name: Screen sharing (reachable only over Tailscale)
         env:
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
