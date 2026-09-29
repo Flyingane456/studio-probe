@@ -1,0 +1,65 @@
+name: cloud-desk-mac
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long the machine stays up (max 350)
+        default: "120"
+jobs:
+  desk:
+    runs-on: macos-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Screen sharing (reachable only over Tailscale)
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          sw_vers
+          csrutil status || true
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all -restart -agent -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASSWORD" > /tmp/kickstart.log 2>&1 || true
+          tail -3 /tmp/kickstart.log
+          sudo launchctl enable system/com.apple.screensharing 2>/dev/null || true
+          sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          sleep 5
+          nc -z 127.0.0.1 5900 && echo "vnc listening" || echo "vnc NOT listening"
+
+      - name: Join Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          brew install tailscale socat > /dev/null 2>&1
+          sudo nohup tailscaled --state=mem: --socket=/tmp/ts.sock > /tmp/tsd.log 2>&1 &
+          sleep 4
+          sudo tailscale --socket=/tmp/ts.sock up --authkey="$TS_AUTHKEY" --hostname=studio-mac --timeout=120s
+          echo "tailscale up exit=$?"
+          tailscale --socket=/tmp/ts.sock ip -4
+
+      - name: Studio tool plugin and link to the home Mac
+        run: |
+          mkdir -p ~/Documents/Roblox/Plugins
+          cp studio/MCPPlugin.rbxmx ~/Documents/Roblox/Plugins/
+          nohup socat TCP-LISTEN:58741,bind=127.0.0.1,fork,reuseaddr TCP:100.98.217.70:58741 > /tmp/socat.log 2>&1 &
+          sleep 2
+          curl -s -m 10 -o /dev/null -w "bridge health %{http_code}\n" http://127.0.0.1:58741/health || echo "bridge not reachable"
+
+      - name: Install and open Studio
+        run: |
+          curl -sL -o studio.dmg https://setup.rbxcdn.com/mac/RobloxStudio.dmg
+          hdiutil attach studio.dmg -nobrowse -mountpoint /Volumes/rbx > /dev/null
+          open /Volumes/rbx/RobloxStudioInstaller.app
+          for i in $(seq 1 60); do pgrep -x RobloxStudio > /dev/null && break; sleep 5; done
+          pgrep -lx RobloxStudio || echo "studio not running yet"
+
+      - name: Stay up
+        run: |
+          end=$(( $(date +%s) + ${{ inputs.minutes }} * 60 ))
+          while [ $(date +%s) -lt $end ]; do
+            echo "$(date +%H:%M) studio=$(pgrep -x RobloxStudio > /dev/null && echo 1 || echo 0)"
+            sleep 300
+          done
+
+      - name: Leave Tailscale
+        if: always()
+        run: sudo tailscale --socket=/tmp/ts.sock logout || true
