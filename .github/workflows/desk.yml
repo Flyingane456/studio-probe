@@ -45,6 +45,9 @@ jobs:
           & $ts up --authkey=$env:TS_AUTHKEY --hostname=studio-cloud --unattended --timeout=120s *> ts_up.txt
           "tailscale up exit=$LASTEXITCODE"
           & $ts ip -4
+          $st = & $ts status --json | ConvertFrom-Json
+          $peers = @($st.Peer.PSObject.Properties.Value)
+          "peers=$($peers.Count) sees_home_mac=$([bool]($peers | Where-Object { $_.HostName -like 'curtiss-macbook-air*' }))"
 
       - name: Install and open Studio
         shell: pwsh
