@@ -82,6 +82,18 @@ jobs:
           "joined=$ok peers=$($peers.Count) sees_home_mac=$([bool]($peers | Where-Object { $_.HostName -like 'curtiss-macbook-air*' }))"
           if (-not $ok) { exit 1 }
 
+      - name: Studio bridge plugin (talks to the home Mac over Tailscale)
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\Roblox\Plugins"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item studio/MCPPlugin.rbxmx $dir
+          Start-Service iphlpsvc -ErrorAction SilentlyContinue
+          netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=58741 connectaddress=100.98.217.70 connectport=58741
+          netsh interface portproxy show all
+          try { (Invoke-WebRequest http://127.0.0.1:58741/health -UseBasicParsing -TimeoutSec 10).StatusCode } catch { "bridge not reachable yet: $($_.Exception.Message)" }
+          exit 0
+
       - name: Install and open Studio
         shell: pwsh
         run: |
