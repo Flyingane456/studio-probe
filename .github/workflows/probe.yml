@@ -1,0 +1,57 @@
+name: studio-probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Machine info
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM,VideoModeDescription | Tee-Object out/gpu.txt
+          Get-CimInstance Win32_Processor | Format-List Name,NumberOfLogicalProcessors | Tee-Object out/cpu.txt
+          [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1) | Tee-Object out/ram_gb.txt
+          query user 2>&1 | Tee-Object out/session.txt
+          [Environment]::UserInteractive | Tee-Object -Append out/session.txt
+          exit 0
+
+      - name: Install and launch Studio, screenshot every 20s
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          function Shot($name) {
+            try {
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $bmp.Save("out/$name.png"); $g.Dispose(); $bmp.Dispose()
+            } catch { "shot $name failed: $_" | Tee-Object -Append out/errors.txt }
+          }
+          $t0 = Get-Date
+          Invoke-WebRequest "https://setup.rbxcdn.com/RobloxStudioInstaller.exe" -OutFile installer.exe
+          Start-Process .\installer.exe
+          Shot "00_after_installer"
+          for ($i = 1; $i -le 30; $i++) {
+            Start-Sleep 20
+            $p = Get-Process RobloxStudioBeta -ErrorAction SilentlyContinue
+            $sec = [int]((Get-Date) - $t0).TotalSeconds
+            $line = if ($p) { "t=${sec}s studio pid=$($p.Id) cpuSec=$([math]::Round($p.CPU,1)) memMB=$([math]::Round($p.WorkingSet64/1MB)) title='$($p.MainWindowTitle)'" } else { "t=${sec}s studio not running" }
+            $line | Tee-Object -Append out/timeline.txt
+            Shot ("{0:D2}_t{1}" -f $i, $sec)
+          }
+
+      - name: Collect Studio logs
+        if: always()
+        shell: pwsh
+        run: |
+          $logs = "$env:LOCALAPPDATA\Roblox\logs"
+          if (Test-Path $logs) { Copy-Item "$logs\*" out/ -Recurse -ErrorAction SilentlyContinue }
+          Get-ChildItem out | Format-Table Name,Length
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-out
+          path: out/
