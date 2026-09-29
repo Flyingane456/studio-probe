@@ -18,10 +18,23 @@ jobs:
         run: |
           sw_vers
           csrutil status || true
+          DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          TS=$(date +%s)
+          for svc in kTCCServiceScreenCapture kTCCServicePostEvent kTCCServiceAccessibility; do
+            for cl in com.apple.screensharing.agent com.apple.RemoteDesktopAgent; do
+              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access VALUES('$svc','$cl',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,$TS,NULL,NULL,'UNUSED',$TS);"
+            done
+          done
+          echo "tcc grants: $(sudo sqlite3 "$DB" "select count(*) from access where client in ('com.apple.screensharing.agent','com.apple.RemoteDesktopAgent') and auth_value=2;")"
+          mkdir -p ~/.ssh && cat studio/desk_ssh.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || sudo systemsetup -setremotelogin on || true
+          sleep 2; nc -z 127.0.0.1 22 && echo "ssh listening" || echo "ssh NOT listening"
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all -restart -agent -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASSWORD" > /tmp/kickstart.log 2>&1 || true
           tail -3 /tmp/kickstart.log
           sudo launchctl enable system/com.apple.screensharing 2>/dev/null || true
           sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          sudo pkill -f ScreensharingAgent 2>/dev/null || true
+          sudo pkill -f screensharingd 2>/dev/null || true
           sleep 5
           nc -z 127.0.0.1 5900 && echo "vnc listening" || echo "vnc NOT listening"
 
