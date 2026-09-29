@@ -1,0 +1,43 @@
+name: mac-studio-probe
+on: workflow_dispatch
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - name: Machine info
+        run: |
+          mkdir -p out
+          system_profiler SPDisplaysDataType SPHardwareDataType > out/hardware.txt 2>&1
+          sed -n '1,60p' out/hardware.txt
+      - name: Install and launch Studio
+        run: |
+          curl -sL -o studio.dmg https://setup.rbxcdn.com/mac/RobloxStudio.dmg
+          hdiutil attach studio.dmg -nobrowse -mountpoint /Volumes/rbx > /dev/null
+          ls /Volumes/rbx
+          APP=$(ls -d /Volumes/rbx/*.app | head -1)
+          open "$APP"
+          for i in $(seq 1 60); do
+            pgrep -x RobloxStudio > /dev/null && break
+            sleep 10
+          done
+          pgrep -lx RobloxStudio || echo "studio not running after 10 min"
+          sleep 60
+          ps -o pid,rss,%cpu,comm -p $(pgrep -x RobloxStudio | head -1) || true
+      - name: Graphics lines from Studio's own log
+        if: always()
+        run: |
+          L=$(ls -t ~/Library/Logs/Roblox/*Studio*.log 2>/dev/null | head -1)
+          echo "log: $L"
+          grep -hE "CreateGraphicsEngine|Metal renderer|isAppleGPU|GfxCard|Adapter|Vulkan|OpenGL" "$L" | cut -c1-220 | head -30
+          cp ~/Library/Logs/Roblox/*Studio*.log out/ 2>/dev/null || true
+          screencapture -x out/screen.png 2>&1 || echo "screenshot failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-probe-${{ matrix.os }}
+          path: out/
