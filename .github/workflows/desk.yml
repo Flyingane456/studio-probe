@@ -1,0 +1,64 @@
+name: cloud-desk
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long the machine stays up (max 350)
+        default: "330"
+jobs:
+  desk:
+    runs-on: windows-latest
+    timeout-minutes: 355
+    steps:
+      - name: Screen size
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop; "resolution set" } catch { "resolution unchanged: $($_.Exception.Message)" }
+          exit 0
+
+      - name: Remote screen (VNC, reachable only over Tailscale)
+        shell: pwsh
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          Invoke-WebRequest "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" -OutFile vnc.msi
+          $msiArgs = @('/i','vnc.msi','/quiet','/norestart','ADDLOCAL=Server',
+            'SERVER_REGISTER_AS_SERVICE=1','SERVER_ADD_FIREWALL_EXCEPTION=1',
+            'SET_USEVNCAUTHENTICATION=1','VALUE_OF_USEVNCAUTHENTICATION=1',
+            'SET_PASSWORD=1',"VALUE_OF_PASSWORD=$env:VNC_PASSWORD",
+            'SET_USECONTROLAUTHENTICATION=1','VALUE_OF_USECONTROLAUTHENTICATION=1',
+            'SET_CONTROLPASSWORD=1',"VALUE_OF_CONTROLPASSWORD=$env:VNC_PASSWORD")
+          $p = Start-Process msiexec -ArgumentList $msiArgs -Wait -PassThru
+          "vnc install exit=$($p.ExitCode)"
+          Get-Service tvnserver | Format-Table Name,Status
+
+      - name: Join Tailscale
+        shell: pwsh
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile ts.msi
+          $p = Start-Process msiexec -ArgumentList '/i','ts.msi','/quiet','/norestart' -Wait -PassThru
+          "tailscale install exit=$($p.ExitCode)"
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $ts); $i++) { Start-Sleep 2 }
+          & $ts up --authkey=$env:TS_AUTHKEY --hostname=studio-cloud --unattended --timeout=120s *> ts_up.txt
+          "tailscale up exit=$LASTEXITCODE"
+          & $ts ip -4
+
+      - name: Install and open Studio
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://setup.rbxcdn.com/RobloxStudioInstaller.exe" -OutFile studio.exe
+          Start-Process .\studio.exe
+          "installer started"
+
+      - name: Stay up
+        shell: pwsh
+        run: |
+          $end = (Get-Date).AddMinutes([int]"${{ inputs.minutes }}")
+          while ((Get-Date) -lt $end) {
+            $s = Get-Process RobloxStudioBeta -ErrorAction SilentlyContinue
+            "{0:HH:mm} studio={1} memMB={2}" -f (Get-Date), [bool]$s, ($(if ($s) { [math]::Round($s[0].WorkingSet64/1MB) } else { 0 }))
+            Start-Sleep 300
+          }
