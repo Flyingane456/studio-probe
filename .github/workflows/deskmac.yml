@@ -17,7 +17,15 @@ jobs:
           DESK_PASSWORD: ${{ secrets.DESK_PASSWORD }}
         run: |
           echo "user=$(whoami)"
-          sudo dscl . -passwd /Users/$(whoami) "$DESK_PASSWORD" && echo "password set"
+          echo "console user=$(stat -f %Su /dev/console)"
+          dscl . list /Users UniqueID | awk '$2>=500'
+          for u in $(dscl . list /Users UniqueID | awk '$2>=500 {print $1}'); do
+            sudo dscl . -passwd /Users/$u "$DESK_PASSWORD" && echo "password set for $u"
+            sudo sysadminctl -screenLock off -password "$DESK_PASSWORD" 2>&1 | tail -1 || true
+          done
+          CU=$(stat -f %Su /dev/console)
+          sudo -u "$CU" defaults write com.apple.screensaver askForPassword -int 0 || true
+          sudo -u "$CU" defaults -currentHost write com.apple.screensaver idleTime 0 || true
           sudo pmset -a displaysleep 0 sleep 0 disksleep 0
           defaults -currentHost write com.apple.screensaver idleTime 0
           sudo defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
