@@ -34,14 +34,21 @@ jobs:
           "vnc install exit=$($p.ExitCode)"
           Get-Service tvnserver | Format-Table Name,Status
 
-      - name: Join Tailscale (sign-in link goes out encrypted)
+      - name: Join Tailscale (key, or an encrypted sign-in link)
         shell: pwsh
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile ts.msi
           $p = Start-Process msiexec -ArgumentList '/i','ts.msi','/quiet','/norestart' -Wait -PassThru
           "tailscale install exit=$($p.ExitCode)"
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           for ($i = 0; $i -lt 30 -and -not (Test-Path $ts); $i++) { Start-Sleep 2 }
+          if ($env:TS_AUTHKEY) {
+            & $ts up --authkey=$env:TS_AUTHKEY --hostname=studio-cloud --unattended --timeout=120s *> ts_up.txt
+            "joined with key, exit=$LASTEXITCODE"
+            if ($LASTEXITCODE -eq 0) { New-Item -ItemType Directory -Force link | Out-Null; Set-Content link/link.bin 'key'; exit 0 }
+          }
           Start-Process $ts -ArgumentList 'up','--hostname=studio-cloud','--unattended','--json' -RedirectStandardOutput ts_up.json -RedirectStandardError ts_up.err -WindowStyle Hidden
           $url = $null
           for ($i = 0; $i -lt 60 -and -not $url; $i++) {
